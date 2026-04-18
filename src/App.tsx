@@ -419,7 +419,7 @@ export default function App() {
             
             <div className="flex gap-6 text-xs">
               <a 
-                href="https://steamcommunity.com/id/kitare"
+                href="https://steamcommunity.com/id/kitarov"
                 target="_blank"
                 rel="noreferrer"
                 className="text-[#45a29e] hover:text-[#66fcf1] transition-colors flex items-center gap-1"
