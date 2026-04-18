@@ -35,11 +35,11 @@ export default function App() {
   const [steamId, setSteamId] = useState("");
   const [ownedGames, setOwnedGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingDetails, setLoadingDetails] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [platformsCache, setPlatformsCache] = useState<Record<number, Platforms>>({});
+  const [rateLimitError, setRateLimitError] = useState<{message: string; retryTime: string} | null>(null);
   
   // Filters
   const [filters, setFilters] = useState({
@@ -60,20 +60,63 @@ export default function App() {
     setError(null);
     setOwnedGames([]);
     setCurrentPage(1);
+    setPlatformsCache({});
     
     try {
       localStorage.setItem("steam_id", steamId);
-      const response = await fetch(`/api/steam/owned-games/${encodeURIComponent(steamId)}`);
+      const response = await fetch(`/api/steam/owned-games?identifier=${encodeURIComponent(steamId)}`);
       const data = await response.json();
       
       if (data.error) {
         throw new Error(data.error);
       }
       
-      setOwnedGames(data.games || []);
+      const games = data.games || [];
+      setOwnedGames(games);
+      setLoading(false); // Show games immediately!
+
+      // Fetch ALL game details in BACKGROUND (don't wait for it)
+      if (games.length > 0) {
+        const appIds = games.map((g: Game) => g.appid);
+        fetch("/api/steam/game-details", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ appIds }),
+        })
+          .then(res => {
+            if (res.status === 429) {
+              return res.json().then(data => {
+                const retryTime = new Date(Date.now() + (data.retryAfter * 1000)).toLocaleTimeString();
+                setRateLimitError({
+                  message: data.error || "Steam API rate limited",
+                  retryTime,
+                });
+                throw new Error("Rate limited");
+              });
+            }
+            return res.json();
+          })
+          .then(detailsData => {
+            setRateLimitError(null);
+            // Extract platforms from { platforms, imageUrl } structure
+            const platformsOnly = Object.entries(detailsData.details || {}).reduce((acc, [key, value]: [string, any]) => {
+              if (value && value.platforms) {
+                acc[parseInt(key)] = value.platforms;
+              } else {
+                acc[parseInt(key)] = null;
+              }
+              return acc;
+            }, {} as Record<number, any>);
+            setPlatformsCache(platformsOnly);
+          })
+          .catch(err => {
+            if (err.message !== "Rate limited") {
+              console.error("Failed to fetch game details", err);
+            }
+          });
+      }
     } catch (err: any) {
       setError(err.message || "Failed to fetch games");
-    } finally {
       setLoading(false);
     }
   };
@@ -102,39 +145,7 @@ export default function App() {
     currentPage * GAMES_PER_PAGE
   );
 
-  // Fetch missing details for the current page
-  useEffect(() => {
-    const fetchMissingDetails = async () => {
-      const missingIds = currentViewGames
-        .map((g) => g.appid)
-        .filter((id) => !platformsCache.hasOwnProperty(id));
 
-      if (missingIds.length === 0) return;
-
-      setLoadingDetails(true);
-      try {
-        const response = await fetch("/api/steam/game-details", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ appIds: missingIds }),
-        });
-        const data = await response.json();
-        
-        setPlatformsCache((prev) => ({
-          ...prev,
-          ...data.details,
-        }));
-      } catch (err) {
-        console.error("Failed to fetch game details", err);
-      } finally {
-        setLoadingDetails(false);
-      }
-    };
-
-    if (currentViewGames.length > 0) {
-      fetchMissingDetails();
-    }
-  }, [currentViewGames, platformsCache]);
 
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
@@ -158,6 +169,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0b0c10] text-[#c5c6c7] font-sans selection:bg-[#66fcf1] selection:text-[#0b0c10]">
+      {/* Rate Limit Alert */}
+      {rateLimitError && (
+        <div className="fixed top-4 right-4 z-50 animate-in fade-in slide-in-from-top-2">
+          <div className="bg-red-900/90 backdrop-blur-md border border-red-500/50 rounded-lg p-4 max-w-sm shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="text-red-400 text-xl mt-0.5">⚠️</div>
+              <div className="flex-1">
+                <h3 className="font-bold text-red-200 mb-1">Steam API Rate Limited!</h3>
+                <p className="text-red-100 text-sm mb-2">{rateLimitError.message}</p>
+                <p className="text-red-300 text-xs font-mono">🕐 Retry at: {rateLimitError.retryTime}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Navigation / Header */}
       <header className="border-b border-[#1f2833] bg-[#0b0c10]/80 backdrop-blur-md sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -312,7 +338,6 @@ export default function App() {
                     key={game.appid} 
                     game={game} 
                     platforms={platformsCache[game.appid]} 
-                    isLoading={loadingDetails}
                   />
                 ))}
               </AnimatePresence>
@@ -398,10 +423,9 @@ export default function App() {
 interface GameCardProps {
   game: Game;
   platforms?: Platforms;
-  isLoading: boolean;
 }
 
-const GameCard: React.FC<GameCardProps> = ({ game, platforms, isLoading }) => {
+const GameCard: React.FC<GameCardProps> = ({ game, platforms }) => {
   const headerUrl = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appid}/header.jpg`;
 
   return (
