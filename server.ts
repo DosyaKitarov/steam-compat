@@ -4,6 +4,7 @@ import path from "path";
 import axios from "axios";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
+import { Redis } from "@upstash/redis";
 
 dotenv.config();
 
@@ -14,8 +15,15 @@ const app = express();
 const PORT = 3000;
 const STEAM_API_KEY = process.env.STEAM_API_KEY;
 
-// Cache map: appId -> { platforms, imageUrl }
-const gameDetailsCache = new Map<number, any>();
+// Initialize Redis for global game details cache
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL || "",
+  token: process.env.KV_REST_API_TOKEN || "",
+});
+
+// Cache prefix for game details
+const CACHE_PREFIX = "game:";
+const CACHE_TTL = 7 * 24 * 60 * 60; // 7 days
 
 // Global error log buffer
 const errorLogs: string[] = [];
@@ -25,6 +33,27 @@ function logError(msg: string, err?: any) {
   errorLogs.push(errorMsg);
   if (errorLogs.length > 50) errorLogs.shift();
   console.error(errorMsg);
+}
+
+// Redis cache helpers
+async function getCachedGame(appId: number) {
+  try {
+    const key = `${CACHE_PREFIX}${appId}`;
+    const cached = await redis.get(key);
+    return cached as any;
+  } catch (err) {
+    console.warn(`Redis get error for ${appId}:`, err);
+    return null;
+  }
+}
+
+async function setCachedGame(appId: number, data: any) {
+  try {
+    const key = `${CACHE_PREFIX}${appId}`;
+    await redis.setex(key, CACHE_TTL, JSON.stringify(data));
+  } catch (err) {
+    console.warn(`Redis set error for ${appId}:`, err);
+  }
 }
 
 // Configuration for batch fetching
@@ -174,7 +203,7 @@ app.use(express.json());
 
 // Debug: Get Server Logs
 app.get("/api/debug/logs", (req, res) => {
-  res.json({ logs: errorLogs, cacheSize: gameDetailsCache.size });
+  res.json({ logs: errorLogs, cacheBackend: "Upstash Redis" });
 });
 
 // API: Get Owned Games
@@ -262,19 +291,23 @@ app.post("/api/steam/game-details", async (req, res) => {
   const missingIds: number[] = [];
   const cacheHits: number[] = [];
 
-  // Check cache first - BEFORE requesting anything
+  // Check Redis cache first - BEFORE requesting anything
   for (const id of appIds) {
-    if (gameDetailsCache.has(id)) {
-      const cached = gameDetailsCache.get(id);
-      results[id] = cached;
-      cacheHits.push(id);
+    const cached = await getCachedGame(id);
+    if (cached) {
+      try {
+        results[id] = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        cacheHits.push(id);
+      } catch (e) {
+        missingIds.push(id);
+      }
     } else {
       missingIds.push(id);
     }
   }
 
   if (cacheHits.length > 0) {
-    console.log(`✓ CACHE: ${cacheHits.length} games from cache`);
+    console.log(`✓ CACHE: ${cacheHits.length} games from Redis cache`);
   }
 
   if (missingIds.length > 0) {
@@ -298,12 +331,12 @@ app.post("/api/steam/game-details", async (req, res) => {
             imageUrl: gameData.imageUrl,
           };
 
-          gameDetailsCache.set(id, cacheEntry);
+          await setCachedGame(id, cacheEntry);
           results[id] = cacheEntry;
         } else {
           // Cache null result to avoid re-fetching failed requests
           const nullEntry = { platforms: null, imageUrl: null };
-          gameDetailsCache.set(id, nullEntry);
+          await setCachedGame(id, nullEntry);
           results[id] = nullEntry;
         }
       }

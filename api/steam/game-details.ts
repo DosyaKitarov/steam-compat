@@ -1,12 +1,15 @@
 import axios from "axios";
+import { Redis } from "@upstash/redis";
 
-// Cache structure: { appId: { platforms, imageUrl } }
-interface GameCache {
-  platforms: any;
-  imageUrl?: string | null;
-}
+// Initialize Redis for global game details cache
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL || "",
+  token: process.env.KV_REST_API_TOKEN || "",
+});
 
-const gameDetailsCache = new Map<number, GameCache>();
+// Cache prefix for game details
+const CACHE_PREFIX = "game:";
+const CACHE_TTL = 7 * 24 * 60 * 60; // 7 days
 
 // Configuration
 const CONCURRENT_BATCHES = 10; // Number of concurrent requests (10 games at once)
@@ -18,6 +21,27 @@ let isRateLimited = false;
 let rateLimitResetTime: number | null = null;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Redis cache helpers
+async function getCachedGame(appId: number) {
+  try {
+    const key = `${CACHE_PREFIX}${appId}`;
+    const cached = await redis.get(key);
+    return cached as any;
+  } catch (err) {
+    console.warn(`Redis get error for ${appId}:`, err);
+    return null;
+  }
+}
+
+async function setCachedGame(appId: number, data: any) {
+  try {
+    const key = `${CACHE_PREFIX}${appId}`;
+    await redis.setex(key, CACHE_TTL, JSON.stringify(data));
+  } catch (err) {
+    console.warn(`Redis set error for ${appId}:`, err);
+  }
+}
 
 const fetchGameBatch = async (appIds: number[]): Promise<Record<number, any>> => {
   if (appIds.length === 0) return {};
@@ -169,23 +193,27 @@ export default async function handler(req: any, res: any) {
   console.log(`║ 🎮 STARTED: Fetching ${appIds.length} games`);
   console.log(`╚═══════════════════════════════════════════════════════════╝`);
 
-  const results: Record<number, GameCache> = {};
+  const results: Record<number, any> = {};
   const missingIds: number[] = [];
   const cacheHits: number[] = [];
 
-  // Check cache first - BEFORE requesting anything
+  // Check Redis cache first - BEFORE requesting anything
   for (const id of appIds) {
-    if (gameDetailsCache.has(id)) {
-      const cached = gameDetailsCache.get(id);
-      results[id] = cached!;
-      cacheHits.push(id);
+    const cached = await getCachedGame(id);
+    if (cached) {
+      try {
+        results[id] = typeof cached === 'string' ? JSON.parse(cached) : cached;
+        cacheHits.push(id);
+      } catch (e) {
+        missingIds.push(id);
+      }
     } else {
       missingIds.push(id);
     }
   }
 
   if (cacheHits.length > 0) {
-    console.log(`✓ CACHE: ${cacheHits.length} games from cache`);
+    console.log(`✓ CACHE: ${cacheHits.length} games from Redis cache`);
   }
 
   if (missingIds.length > 0) {
@@ -204,17 +232,17 @@ export default async function handler(req: any, res: any) {
         const gameData = data[id];
 
         if (gameData && gameData.platforms !== undefined) {
-          const cacheEntry: GameCache = {
+          const cacheEntry = {
             platforms: gameData.platforms,
             imageUrl: gameData.imageUrl,
           };
 
-          gameDetailsCache.set(id, cacheEntry);
+          await setCachedGame(id, cacheEntry);
           results[id] = cacheEntry;
         } else {
           // Cache null result to avoid re-fetching failed requests
-          const nullEntry: GameCache = { platforms: null, imageUrl: null };
-          gameDetailsCache.set(id, nullEntry);
+          const nullEntry = { platforms: null, imageUrl: null };
+          await setCachedGame(id, nullEntry);
           results[id] = nullEntry;
         }
       }

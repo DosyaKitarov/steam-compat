@@ -60,7 +60,9 @@ export default function App() {
     setError(null);
     setOwnedGames([]);
     setCurrentPage(1);
-    setPlatformsCache({});
+    // DON'T clear platformsCache - it's shared across all users (server-side cached)
+    setSearchQuery(""); // Clear search when loading new profile
+    setFilters({ windows: true, mac: true, linux: true }); // Reset filters
     
     try {
       localStorage.setItem("steam_id", steamId);
@@ -171,7 +173,7 @@ export default function App() {
     <div className="min-h-screen bg-[#0b0c10] text-[#c5c6c7] font-sans selection:bg-[#66fcf1] selection:text-[#0b0c10]">
       {/* Rate Limit Alert */}
       {rateLimitError && (
-        <div className="fixed top-4 right-4 z-50 animate-in fade-in slide-in-from-top-2">
+        <div className="fixed bottom-4 right-4 z-50 animate-in fade-in slide-in-from-bottom-2">
           <div className="bg-red-900/90 backdrop-blur-md border border-red-500/50 rounded-lg p-4 max-w-sm shadow-2xl">
             <div className="flex items-start gap-3">
               <div className="text-red-400 text-xl mt-0.5">⚠️</div>
@@ -210,6 +212,18 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
+            {ownedGames.length > 0 && (
+              <button 
+                onClick={() => {
+                  setSteamId("");
+                  clearSession();
+                }}
+                className="px-4 py-2 hover:bg-[#1f2833] rounded-full transition-colors text-[#45a29e] hover:text-[#66fcf1] text-sm font-medium border border-[#45a29e]/30 hover:border-[#66fcf1]"
+                title="Switch profile"
+              >
+                Switch Profile
+              </button>
+            )}
             <button 
               onClick={clearSession}
               className="p-2 hover:bg-[#1f2833] rounded-full transition-colors text-[#45a29e] hover:text-[#66fcf1]"
@@ -331,17 +345,35 @@ export default function App() {
             </div>
 
             {/* Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 xxl:grid-cols-5 gap-6">
-              <AnimatePresence mode="popLayout">
-                {currentViewGames.map((game) => (
-                  <GameCard 
-                    key={game.appid} 
-                    game={game} 
-                    platforms={platformsCache[game.appid]} 
-                  />
+            <motion.div 
+              layout
+              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 xxl:grid-cols-5 gap-6"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+              key={`page-${currentPage}`}
+            >
+              <AnimatePresence mode="wait">
+                {currentViewGames.map((game, index) => (
+                  <motion.div
+                    key={game.appid}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.95 }}
+                    transition={{ 
+                      duration: 0.2,
+                      delay: index * 0.02
+                    }}
+                  >
+                    <GameCard 
+                      game={game} 
+                      platforms={platformsCache[game.appid]} 
+                    />
+                  </motion.div>
                 ))}
               </AnimatePresence>
-            </div>
+            </motion.div>
 
             {/* Pagination */}
             {totalPages > 1 && (
