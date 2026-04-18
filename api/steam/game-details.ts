@@ -47,6 +47,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const results: Record<number, any> = {};
+  const _missingIds: number[] = [];
   const missingIds: number[] = [];
 
   // Check cache first
