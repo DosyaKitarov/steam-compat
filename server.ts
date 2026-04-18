@@ -110,10 +110,6 @@ const fetchGameBatch = async (appIds: number[]): Promise<Record<number, any>> =>
         const platforms = gameResponse.data?.platforms || {};
         const gameInfo = gameResponse.data;
         const imageUrl = gameInfo?.header_image || null;
-        const gameName = gameInfo?.name || "Unknown";
-        const platformList = Object.keys(platforms).filter(p => platforms[p]).join(", ") || "None";
-        
-        console.log(`      ⏱️  Game ${appId}: ${gameEndTime - gameStartTime}ms - ✅ ${gameName} | Platforms: ${platformList}`);
         
         // Reset rate limit if successful
         isRateLimited = false;
@@ -121,8 +117,7 @@ const fetchGameBatch = async (appIds: number[]): Promise<Record<number, any>> =>
         
         return { appId, data: { platforms, imageUrl } };
       } else {
-        console.log(`      ⏱️  Game ${appId}: ${gameEndTime - gameStartTime}ms - ❌ API returned: success=${gameResponse?.success}`);
-        return { appId, data: null };
+        return { appId, data: { platforms: null, imageUrl: null, refused: true } };
       }
     } catch (error: any) {
       const gameEndTime = Date.now();
@@ -132,7 +127,7 @@ const fetchGameBatch = async (appIds: number[]): Promise<Record<number, any>> =>
         isRateLimited = true;
         rateLimitResetTime = Date.now() + 5 * 60 * 1000; // 5 minutes
         console.error(
-          `🚫 STEAM RATE LIMITED (429) on Game ${appId}! Next retry at ${new Date(rateLimitResetTime).toISOString()}`
+          `🚫 STEAM RATE LIMITED (429)! Next retry at ${new Date(rateLimitResetTime).toISOString()}`
         );
         throw {
           code: "RATE_LIMITED",
@@ -140,7 +135,6 @@ const fetchGameBatch = async (appIds: number[]): Promise<Record<number, any>> =>
         };
       }
 
-      console.log(`      ❌ Game ${appId}: ${gameEndTime - gameStartTime}ms - Error: ${error.message}`);
       return { appId, data: null };
     }
   });
@@ -162,24 +156,14 @@ const fetchDetailsUrl = async (appIds: number[]): Promise<Record<number, any>> =
   if (appIds.length === 0) return {};
 
   const allResults: Record<number, any> = {};
-  const mainStartTime = Date.now();
-
-  console.log(`📦 Fetching ${appIds.length} games with ${CONCURRENT_BATCHES} concurrent requests`);
 
   // Process with concurrency limit - send CONCURRENT_BATCHES requests at a time
   for (let i = 0; i < appIds.length; i += CONCURRENT_BATCHES) {
-    const batchStartIndex = i;
-    const batchGroupStartTime = Date.now();
     const batch = appIds.slice(i, i + CONCURRENT_BATCHES);
-
-    console.log(`  📥 Batch ${Math.floor(i / CONCURRENT_BATCHES) + 1}: Processing ${batch.length} games (${batchStartIndex + 1}-${Math.min(batchStartIndex + batch.length, appIds.length)} of ${appIds.length})`);
 
     try {
       const batchResults = await fetchGameBatch(batch);
       Object.assign(allResults, batchResults);
-      
-      const batchGroupEndTime = Date.now();
-      console.log(`  ✅ Batch completed in ${batchGroupEndTime - batchGroupStartTime}ms`);
     } catch (error: any) {
       if (error.code === "RATE_LIMITED") {
         throw error; // Propagate rate limit error
@@ -188,23 +172,14 @@ const fetchDetailsUrl = async (appIds: number[]): Promise<Record<number, any>> =
 
     // Delay between batches to avoid overwhelming Steam
     if (i + CONCURRENT_BATCHES < appIds.length) {
-      console.log(`  ⏸️  Waiting ${BATCH_DELAY_MS}ms before next batch...`);
       await sleep(BATCH_DELAY_MS);
     }
   }
-
-  const mainEndTime = Date.now();
-  console.log(`📊 Total API fetch time: ${mainEndTime - mainStartTime}ms`);
 
   return allResults;
 };
 
 app.use(express.json());
-
-// Debug: Get Server Logs
-app.get("/api/debug/logs", (req, res) => {
-  res.json({ logs: errorLogs, cacheBackend: "Upstash Redis" });
-});
 
 // API: Get Owned Games
 app.get("/api/steam/owned-games", async (req, res) => {

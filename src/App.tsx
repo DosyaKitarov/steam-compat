@@ -100,9 +100,14 @@ export default function App() {
           })
           .then(detailsData => {
             setRateLimitError(null);
-            // Extract platforms from { platforms, imageUrl } structure
+            // Extract platforms from { platforms, imageUrl, refused } structure
             const platformsOnly = Object.entries(detailsData.details || {}).reduce((acc, [key, value]: [string, any]) => {
-              if (value && value.platforms) {
+              if (!value) {
+                acc[parseInt(key)] = null;
+              } else if (value.refused) {
+                // Mark as refused explicitly
+                acc[parseInt(key)] = { windows: false, mac: false, linux: false, refused: true };
+              } else if (value.platforms) {
                 acc[parseInt(key)] = value.platforms;
               } else {
                 acc[parseInt(key)] = null;
@@ -130,8 +135,13 @@ export default function App() {
       const isLoading = !platformsCache.hasOwnProperty(game.appid);
       
       // If we don't have the platform data yet, we don't filter it out
-      // This prevents the deadlock where an empty filtered list prevents fetching details.
       if (isLoading) return matchesSearch;
+
+      // If Steam refused to give data, always show it (don't filter by platform)
+      if (platforms && (platforms as any).refused) return matchesSearch;
+
+      // If we have no platform data (null), only filter by search
+      if (!platforms) return matchesSearch;
 
       const matchesMac = !filters.mac || (platforms && platforms.mac);
       const matchesLinux = !filters.linux || (platforms && platforms.linux);
@@ -146,21 +156,6 @@ export default function App() {
     (currentPage - 1) * GAMES_PER_PAGE,
     currentPage * GAMES_PER_PAGE
   );
-
-
-
-  const [showDebug, setShowDebug] = useState(false);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-
-  const fetchDebugLogs = async () => {
-    try {
-      const res = await fetch("/api/debug/logs");
-      const data = await res.json();
-      setDebugLogs(data.logs || []);
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const clearSession = () => {
     setSteamId("");
@@ -194,7 +189,7 @@ export default function App() {
               <Gamepad2 className="w-5 h-5 text-[#0b0c10]" />
             </div>
             <h1 className="font-bold text-xl tracking-tight text-[#f5f5f5] hidden sm:block">
-              Steam Explorer
+              Steam Compat
             </h1>
           </div>
 
@@ -368,7 +363,8 @@ export default function App() {
                   >
                     <GameCard 
                       game={game} 
-                      platforms={platformsCache[game.appid]} 
+                      platforms={platformsCache[game.appid]}
+                      isLoading={!platformsCache.hasOwnProperty(game.appid)}
                     />
                   </motion.div>
                 ))}
@@ -414,39 +410,38 @@ export default function App() {
 
       {/* Footer Info */}
       <footer className="py-12 px-4 border-t border-[#1f2833]">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-[#45a29e]">
-          <div className="flex items-center gap-4">
-            <p>© 2026 Steam Library Explorer. Powered by Steam Store API.</p>
-            <button 
-              onClick={() => {
-                setShowDebug(!showDebug);
-                if (!showDebug) fetchDebugLogs();
-              }}
-              className="hover:text-[#66fcf1] underline"
-            >
-              [Debug Logs]
-            </button>
-          </div>
-          <p>Steam and the Steam logo are trademarks of Valve Corporation.</p>
-        </div>
-
-        {showDebug && (
-          <div className="max-w-7xl mx-auto mt-8 p-4 bg-black rounded-lg font-mono text-[10px] text-green-400 overflow-y-auto max-h-64 border border-[#45a29e]/30">
-            <div className="flex justify-between mb-2">
-              <span className="font-bold uppercase tracking-widest text-green-600">Server Logs</span>
-              <button onClick={fetchDebugLogs} className="hover:text-white underline">Refresh</button>
+        <div className="max-w-7xl mx-auto">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-6">
+            <div className="flex flex-col gap-2">
+              <p className="text-sm font-bold text-[#f5f5f5]">Steam Compat</p>
+              <p className="text-xs text-[#45a29e]">Check game platform compatibility for your Steam library</p>
             </div>
-            {debugLogs.length === 0 ? (
-              <p className="opacity-50">No logs found. Try fetching your library first.</p>
-            ) : (
-              debugLogs.map((log, i) => (
-                <div key={i} className="mb-1 border-b border-white/5 pb-1">
-                  {log}
-                </div>
-              ))
-            )}
+            
+            <div className="flex gap-6 text-xs">
+              <a 
+                href="https://steamcommunity.com/id/kitare"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[#45a29e] hover:text-[#66fcf1] transition-colors flex items-center gap-1"
+              >
+                Steam
+              </a>
+              <a 
+                href="https://github.com/DosyaKitarov"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[#45a29e] hover:text-[#66fcf1] transition-colors flex items-center gap-1"
+              >
+                GitHub
+              </a>
+            </div>
           </div>
-        )}
+
+          <div className="text-center border-t border-[#1f2833] pt-6 text-xs text-[#45a29e]">
+            <p>© 2026 Steam Compat. Made by <span className="text-[#66fcf1] font-semibold">DosyaKitarov</span></p>
+            <p className="mt-2">Steam and the Steam logo are trademarks of Valve Corporation.</p>
+          </div>
+        </div>
       </footer>
     </div>
   );
@@ -455,9 +450,10 @@ export default function App() {
 interface GameCardProps {
   game: Game;
   platforms?: Platforms;
+  isLoading?: boolean;
 }
 
-const GameCard: React.FC<GameCardProps> = ({ game, platforms }) => {
+const GameCard: React.FC<GameCardProps> = ({ game, platforms, isLoading }) => {
   const headerUrl = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${game.appid}/header.jpg`;
 
   return (
@@ -506,10 +502,19 @@ const GameCard: React.FC<GameCardProps> = ({ game, platforms }) => {
 
         <div className="flex items-center justify-between border-t border-[#0b0c10]/30 pt-4">
           <div className="flex gap-3">
-            {!platforms ? (
+            {isLoading ? (
               <div className="flex items-center gap-2 text-[10px] text-[#45a29e]/50 italic">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Checking compatibility...
+              </div>
+            ) : (platforms as any)?.refused ? (
+              <div className="flex items-center gap-2 text-[10px] text-red-400/70 italic">
+                <Info className="w-3 h-3" />
+                Steam refused data
+              </div>
+            ) : !platforms ? (
+              <div className="text-[10px] text-[#45a29e]/50 italic">
+                No platform data
               </div>
             ) : (
               <>

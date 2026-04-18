@@ -98,8 +98,8 @@ const fetchGameBatch = async (appIds: number[]): Promise<Record<number, any>> =>
         
         return { appId, data: { platforms, imageUrl } };
       } else {
-        console.log(`      ⏱️  Game ${appId}: ${gameEndTime - gameStartTime}ms - ❌ API returned: success=${gameResponse?.success}`);
-        return { appId, data: null };
+        console.log(`      ⏱️  Game ${appId}: ${gameEndTime - gameStartTime}ms - ⛔ Steam refused (success=false)`);
+        return { appId, data: { platforms: null, imageUrl: null, refused: true } };
       }
     } catch (error: any) {
       const gameEndTime = Date.now();
