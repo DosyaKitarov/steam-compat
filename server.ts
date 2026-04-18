@@ -42,7 +42,7 @@ async function getCachedGame(appId: number) {
     const cached = await redis.get(key);
     return cached as any;
   } catch (err) {
-    console.warn(`Redis get error for ${appId}:`, err);
+    console.error(`❌ Redis GET error for ${appId}:`, (err as any).message);
     return null;
   }
 }
@@ -52,7 +52,7 @@ async function setCachedGame(appId: number, data: any) {
     const key = `${CACHE_PREFIX}${appId}`;
     await redis.setex(key, CACHE_TTL, JSON.stringify(data));
   } catch (err) {
-    console.warn(`Redis set error for ${appId}:`, err);
+    console.error(`❌ Redis SET error for ${appId}:`, (err as any).message);
   }
 }
 
@@ -284,21 +284,31 @@ app.post("/api/steam/game-details", async (req, res) => {
 
   const startTime = Date.now();
   console.log(`\n╔═══════════════════════════════════════════════════════════╗`);
-  console.log(`║ 🎮 STARTED: Fetching ${appIds.length} games`);
+  console.log(`║ 🎮 REQUEST: ${appIds.length} games`);
   console.log(`╚═══════════════════════════════════════════════════════════╝`);
 
   const results: Record<number, any> = {};
   const missingIds: number[] = [];
   const cacheHits: number[] = [];
 
-  // Check Redis cache first - BEFORE requesting anything
-  for (const id of appIds) {
-    const cached = await getCachedGame(id);
+  // Check Redis cache first - PARALLEL to avoid sequential slowness
+  console.log(`🔍 Checking cache for ${appIds.length} games (parallel)...`);
+  const cacheCheckStart = Date.now();
+  
+  const cachePromises = appIds.map(id => 
+    getCachedGame(id).then(cached => ({ id, cached }))
+  );
+  const cacheResults = await Promise.all(cachePromises);
+  const cacheCheckTime = Date.now() - cacheCheckStart;
+  console.log(`   ⏱️  Parallel cache check: ${cacheCheckTime}ms`);
+
+  for (const { id, cached } of cacheResults) {
     if (cached) {
       try {
         results[id] = typeof cached === 'string' ? JSON.parse(cached) : cached;
         cacheHits.push(id);
       } catch (e) {
+        console.warn(`⚠️  Cache parse error for game ${id}`);
         missingIds.push(id);
       }
     } else {
@@ -306,12 +316,12 @@ app.post("/api/steam/game-details", async (req, res) => {
     }
   }
 
-  if (cacheHits.length > 0) {
-    console.log(`✓ CACHE: ${cacheHits.length} games from Redis cache`);
-  }
-
-  if (missingIds.length > 0) {
-    console.log(`⬇️  FETCH: ${missingIds.length} games from Steam API`);
+  console.log(`\n📊 CACHE RESULT:`);
+  console.log(`   ✅ HIT: ${cacheHits.length} games from Redis`);
+  console.log(`   ❌ MISS: ${missingIds.length} games need Steam API`);
+  
+  if (missingIds.length === 0) {
+    console.log(`\n⚡ INSTANT: All games from cache!`);
   }
 
   // Fetch all missing IDs in parallel batches
@@ -357,7 +367,9 @@ app.post("/api/steam/game-details", async (req, res) => {
 
   const totalTime = Date.now() - startTime;
   console.log(`\n╔═══════════════════════════════════════════════════════════╗`);
-  console.log(`║ ✅ COMPLETED: ${totalTime}ms total (${(totalTime / appIds.length).toFixed(1)}ms/game)`);
+  console.log(`║ ⏱️  TOTAL: ${totalTime}ms`);
+  console.log(`║ 📊 Requested: ${appIds.length} games | Returning: ${cacheHits.length + missingIds.length} results`);
+  console.log(`║ � Cache hits: ${cacheHits.length} | API calls: ${Math.min(missingIds.length, appIds.length - cacheHits.length)}`);
   console.log(`╚═══════════════════════════════════════════════════════════╝\n`);
 
   res.json({ details: results });
