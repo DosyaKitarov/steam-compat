@@ -1,0 +1,6 @@
+{
+  "name": "Steam Compat",
+  "description": "Discover your Steam games with platform compatibility filters for MacOS and Linux/Steam Deck. Features smart caching and paginated library browsing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
